@@ -1,0 +1,4 @@
+spinnaker-python @ file:///home/sredondo/Projects/flir_gradio_image_adquisition/wheels/spinnaker_python-3.1.0.79-cp310-cp310-linux_x86_64.whl
+numpy==1.24.3
+gradio==3.34.0
+flask==2.3.2

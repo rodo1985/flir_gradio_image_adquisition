@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <img src="{{ url_for('static', filename='logo.png') }}" alt="Company Logo">
+    <title>My Flask and Gradio App</title>
+</head>
+<body>
+    <h1>Welcome to My Flask and Gradio App</h1>
+    <p>This is a simple integration of a Flask application and a Gradio interface.</p>
+
+    <!-- Here is where we include the Gradio interface via an iframe -->
+    <iframe src="http://localhost:7860/" width="100%" height="5000" style="border:none;"></iframe>
+</body>
+</html>
