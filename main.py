@@ -1,122 +1,178 @@
 import os
 import cv2
 import gradio as gr
+from modules.GCP_Inference import GCP_Inference
 from modules.SingleShotCamera import SingleShotCamera
 import time
 from flask import Flask, render_template
 import threading
 import datetime
-import base64
+import numpy as np
+from keras.models import load_model
+import tensorflow as tf
 
-from google.cloud import aiplatform
-from google.cloud.aiplatform.gapic.schema import predict
+def preprocess_image(img):
 
+    # crop roi
+    start_y, start_x = 800, 950
+    end_y, end_x = 1300, 1450
 
-def predict_image_classification_sample(
-    project: str,
-    endpoint_id: str,
-    filename: str,
-    location: str = "us-central1",
-    api_endpoint: str = "us-central1-aiplatform.googleapis.com",
-):
-    # The AI Platform services require regional API endpoints.
-    client_options = {"api_endpoint": api_endpoint}
-    # Initialize client that will be used to create and send requests.
-    # This client only needs to be created once, and can be reused for multiple requests.
-    client = aiplatform.gapic.PredictionServiceClient(client_options=client_options)
-    with open(filename, "rb") as f:
-        file_content = f.read()
+    # crop image
+    img = img[start_y:end_y, start_x:end_x]
 
-    # The format of each instance should conform to the deployed model's prediction input schema.
-    encoded_content = base64.b64encode(file_content).decode("utf-8")
-    instance = predict.instance.ImageClassificationPredictionInstance(
-        content=encoded_content,
-    ).to_value()
-    instances = [instance]
-    # See gs://google-cloud-aiplatform/schema/predict/params/image_classification_1.0.0.yaml for the format of the parameters.
-    parameters = predict.params.ImageClassificationPredictionParams(
-        confidence_threshold=0.5, max_predictions=5,
-    ).to_value()
-    endpoint = client.endpoint_path(
-        project=project, location=location, endpoint=endpoint_id
-    )
-    response = client.predict(
-        endpoint=endpoint, instances=instances, parameters=parameters
-    )
-    print("response")
-    print(" deployed_model_id:", response.deployed_model_id)
-    # See gs://google-cloud-aiplatform/schema/predict/prediction/image_classification_1.0.0.yaml for the format of the predictions.
-    predictions = response.predictions
-    for prediction in predictions:
-        print(" prediction:", dict(prediction))
+    # resize
+    return cv2.resize(img, (224, 224))
+    
+def trigger_camera(inference_mode):
 
-
-def trigger_camera():
-
+    # memorized time
     start = time.time()
 
     # Capture an image
     img = camera.capture_image()
 
-    # Top left corner of the crop box
-    start_y, start_x = 800, 950
+    if img is not None:
 
-    # Bottom right corner of the crop box
-    end_y, end_x = 1300, 1450
+        # gett elapsed time in ms
+        acquistion_time = (time.time() - start)*1000
 
-    img = img[start_y:end_y, start_x:end_x]
+        # memorize time
+        start = time.time()
 
-    # print elapsed time in ms
-    print("Elapsed time: {:.2f} ms".format((time.time() - start)*1000))
+        if inference_mode == "edge":
+            
+            # preprocess
+            img = preprocess_image(img)
 
-    # Create the directory if it does not exist
-    if not os.path.exists('images'):
-        os.makedirs('images')
+            # Normalize the image
+            normalized_image_array = (img.astype(np.float32) / 127.5) - 1
 
-    # creates date time
-    date_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            # Load the image into the array
+            data[0] = normalized_image_array
 
-    # filename
-    filename = os.path.join('images', f"image_{date_time}.png")
+            # get elapsed time in ms
+            preprocess_time = (time.time() - start)*1000
 
-    # Save the image with the date and time in the filename
-    cv2.imwrite(filename, img)
+            # memorize time
+            start = time.time()
 
-    # image prediction
-    predict_image_classification_sample(
-    project="795715818331",
-    endpoint_id="1477985520289054720",
-    location="us-central1",
-    filename=filename
-    )
+            # Predicts the model
+            prediction = model.predict(data)
+            
+            # get elapsed time in ms
+            inference_time = (time.time() - start)*1000
+        else:
+            # memorize time
+            start = time.time()
 
-    return img
+            # preprocess
+            img = preprocess_image(img)
 
+            encoded_content = gcp_infer.preproces(img)
+
+            # get elapsed time in ms
+            preprocess_time = (time.time() - start)*1000
+
+            # memorize time
+            start = time.time()
+
+            prediction = gcp_infer.run(encoded_content)
+
+            # get elapsed time in ms
+            inference_time = (time.time() - start)*1000
+
+        # get elapsed time in ms
+        total_time = acquistion_time + preprocess_time + inference_time
+
+        # Create the directory if it does not exist
+        if not os.path.exists('images'):
+            os.makedirs('images')
+
+        # creates date time
+        date_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+        # filename
+        filename = os.path.join('images', f"image_{date_time}.png")
+
+        # Save the image with the date and time in the filename
+        cv2.imwrite(filename, img)
+
+        # returns values
+        return img, {"Class A": float(prediction[0][0]), "Class B": float(prediction[0][1])}, "{:.2f} ms".format(acquistion_time), "{:.2f} ms".format(preprocess_time),"{:.2f} ms".format(inference_time), "{:.2f} ms".format(total_time)
+    else:
+        return None, None, None, None
+
+print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+
+# Disable scientific notation for clarity
+np.set_printoptions(suppress=True)
+
+# Load the model
+model = load_model("models/classify/keras_model.h5", compile=False)
+
+# Load the labels
+class_names = open("models/classify/labels.txt", "r").readlines()
+
+
+# Create the array of the right shape to feed into the keras model
+# The 'length' or number of images you can put into the array is
+# determined by the first position in the shape tuple, in this case 1
+data = np.ndarray(shape=(1, 224, 224, 3), dtype=np.float32)
+
+# gcp inference
+gcp_infer = GCP_Inference(
+            project="795715818331",
+            endpoint_id="1477985520289054720",
+        )
 
 # Create a camera object
 camera = SingleShotCamera()
 
 css = "footer {display: none !important;} .gradio-container {min-height: 0px !important;}"
 
-with gr.Blocks(css=css) as demo:
+with gr.Blocks(css=css, theme=gr.themes.Soft()) as demo:
+    gr.Markdown(
+    """
+    # Edge vs Cloud Computing!
+    """)
+    with gr.Tab(label= 'Production Mode'):
+        with gr.Row():
+            with gr.Column():
+                with gr.Row():
+                    mode_dropdown = gr.Dropdown(["edge", "cloud"], value = "edge", label="Inference", info="Select where the image will be process")
+                with gr.Row():
+                    image_viewer = gr.Image().style(height=500)
+                with gr.Row():
+                    trigger_button = gr.Button(label="Trigger Camera")
+            with gr.Column():
+                
+                label_viewer = gr.Label(num_top_classes=2, label='Classification')
+                acquistion_time_texbox = gr.Textbox(label="Acquistion time")
+                preprocess_time_texbox = gr.Textbox(label="Preprocess time")
+                process_time_texbox = gr.Textbox(label="Inference time")
+                total_time_texbox = gr.Textbox(label="Total time")
 
-    with gr.Box():
-        # Crear la interfaz de Gradio
-        # specify the shape, height and width as needed
-        image_viewer = gr.Image(shape=(100, 100), width=100, height=100)
-        trigger_button = gr.Button(label="Trigger Camera")
-        trigger_button.click(trigger_camera, outputs=image_viewer)
+            trigger_button.click(trigger_camera, inputs = mode_dropdown, outputs=[
+                                image_viewer, label_viewer, acquistion_time_texbox, preprocess_time_texbox, process_time_texbox, total_time_texbox])
+    with gr.Tab(label= 'Statistics'):
+        gr.Markdown(
+        """
+        # Time plotting
+        """)
+        plot = gr.LinePlot(show_label=False)
 
-# Run Gradio interface in a separate thread
-threading.Thread(target=demo.launch).start()
+demo.launch(share=False).start()
 
-app = Flask(__name__)
+# # Run Gradio interface in a separate thread
+# threading.Thread(target=demo.launch).start()
 
-
-@app.route('/')
-def home():
-    return render_template('index.html')
+# app = Flask(__name__)
 
 
-if __name__ == '__main__':
-    app.run(port=5000)
+# @app.route('/')
+# def home():
+#     return render_template('index.html')
+
+
+# if __name__ == '__main__':
+#     app.run(port=5000)

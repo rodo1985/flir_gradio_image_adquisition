@@ -24,6 +24,7 @@ class SingleShotCamera:
         self.cam.ExposureTime.SetValue(500)
         self.cam.AcquisitionMode.SetValue(PySpin.AcquisitionMode_Continuous)
         self.cam.TriggerMode.SetValue(PySpin.TriggerMode_On)
+        self.cam.TriggerSource.SetValue(PySpin.TriggerSource_Software)
         
         # Begin acquiring images
         self.cam.BeginAcquisition()
@@ -33,13 +34,12 @@ class SingleShotCamera:
         Capture an image from the camera
         """
         try:
-            
 
             # excute software trigger
             self.cam.TriggerSoftware.Execute()
 
             # Retrieve next received image and ensure image completion
-            image = self.cam.GetNextImage()
+            image = self.cam.GetNextImage(1000)
 
             if image.IsIncomplete():
                 print('Image incomplete with image status %d ...' % image.GetImageStatus())
@@ -47,6 +47,9 @@ class SingleShotCamera:
                 # Convert the raw image to an OpenCV image (BGR)
                 img = cv2.cvtColor(image.GetNDArray(), cv2.COLOR_BayerBG2BGR_EA)
 
+            #  Release image
+            image.Release()
+            
             return img
 
         except PySpin.SpinnakerException as ex:
